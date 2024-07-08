@@ -221,7 +221,19 @@ func (v String) Skip(buffer *Buffer) error {
 }
 
 func (b *ByteArray) Read(buffer *Buffer) error {
-	panic("implement me")
+	var length Varint
+	err := length.Read(buffer)
+	if err != nil {
+		return err
+	}
+
+	bytes := make([]byte, length)
+	copy(bytes, buffer.Data[buffer.index:buffer.index+int(length)])
+	buffer.index += int(length)
+
+	*b = bytes
+
+	return nil
 }
 
 func (b ByteArray) Write(buffer *Buffer) {

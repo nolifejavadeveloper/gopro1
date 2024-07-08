@@ -3,16 +3,32 @@ package core
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha1"
+	"encoding/hex"
+	"fmt"
 	"github.com/rs/zerolog"
 	"gopro/core/component"
 	"gopro/core/proto"
+	"gopro/core/proto/encoding"
+	"gopro/core/proto/encryption"
 	"gopro/core/proto/packets"
+	"io"
+	"net/http"
+	"os"
+	"strings"
+)
+
+const (
+	url = "https://sessionserver.mojang.com/session/minecraft/hasJoined?"
 )
 
 type loginHandler struct {
 	deps   *HandlerDependency
 	conn   *Conn
 	logger zerolog.Logger
+
+	username string
 
 	token []byte
 }
@@ -26,6 +42,10 @@ func (h *loginHandler) Handle(packet *proto.Packet) {
 	case 0x00:
 		{
 			h.handleLoginStart(packet)
+		}
+	case 0x01:
+		{
+			h.handleEncryptionResponse(packet)
 		}
 	}
 }
@@ -55,12 +75,14 @@ func (h *loginHandler) disconnect(reason *component.TextComponent) {
 
 func (h *loginHandler) handleLoginStart(packet *proto.Packet) {
 	h.logger.Debug().Msg("Handling Login Start")
-	_, err := packets.NewLoginStart(packet)
+	ls, err := packets.NewLoginStart(packet)
 	if err != nil {
 		h.logger.Error().Err(err).Str("packet", "start").Msg("Error while reading packet, closing connection")
 		h.conn.Close()
 		return
 	}
+
+	h.username = string(ls.Name)
 
 	h.writeEncryptionRequest()
 }
@@ -76,13 +98,15 @@ func (h *loginHandler) writeEncryptionRequest() {
 
 	h.token = token
 
-	packet := packets.NewEncryptionRequest(h.deps.Public, token)
-	toSend, err := proto.Write(0x01, &packet.PublicKey, &packet.VerifyToken, &packet.ShouldAuth)
+	packet := packets.NewEncryptionRequest(h.deps.Keypair.Public, token)
+	toSend, err := proto.Write(0x01, &packet.ServerId, &packet.PublicKey, &packet.VerifyToken)
 	if err != nil {
 		h.logger.Error().Err(err).Str("packet", "encryption_request").Msg("Error while writing packet, closing connection")
 		h.conn.Close()
 		return
 	}
+
+	//TODO: figure out whether to include the length of the public key inside the pubkey object instead of getting the len every time
 
 	err = h.conn.SendPacket(toSend)
 	if err != nil {
@@ -90,6 +114,8 @@ func (h *loginHandler) writeEncryptionRequest() {
 		h.conn.Close()
 		return
 	}
+
+	h.conn.encryptedState = encryption.PrivateKey
 }
 
 func (h *loginHandler) generateVerifyToken() ([]byte, error) {
@@ -105,19 +131,86 @@ func (h *loginHandler) generateVerifyToken() ([]byte, error) {
 func (h *loginHandler) handleEncryptionResponse(packet *proto.Packet) {
 	es, err := packets.NewEncryptionResponse(packet)
 	if err != nil {
-		h.logger.Error().Err(err).Str("packet", "encryption_response").Msg("Error while reading packet, closing connection")
+		h.logger.Error().Err(err).Str("packet", "encryption_response").Msg("error while reading packet, closing connection")
 		h.conn.Close()
 	}
 
+	h.decrypt(&es.SharedSecret)
+	h.decrypt(&es.VerifyToken)
+
 	if bytes.Equal(h.token, es.VerifyToken) {
-		h.logger.Debug().Msg("Verify token matched")
+		h.logger.Debug().Msg("verify token matched")
 	} else {
-		h.logger.Debug().Msg("Verify token isn't matched")
+		h.logger.Debug().Msg("verify token isn't matched")
 		h.conn.Close()
 		return
 	}
 
+	//change the encryption state
+	h.conn.encryptedState = encryption.SharedKey
+	h.conn.sharedSecret = es.SharedSecret
+
 	//release the memory
 	h.token = nil
 
+	hash := h.makeHash()
+	res, err := http.Get(url + "username=" + h.username + "&serverId=" + hash)
+	fmt.Println(err)
+	fmt.Println(res.StatusCode)
+	resBody, err := io.ReadAll(res.Body)
+	if err != nil {
+		fmt.Printf("client: could not read response body: %s\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("client: response body: %s\n", resBody)
 }
+
+func (h *loginHandler) decrypt(ba *encoding.ByteArray) []byte {
+	decrypted, err := rsa.DecryptPKCS1v15(rand.Reader, h.deps.Keypair.Private, *ba)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("error decrypting encryption response data")
+		h.conn.Close()
+		return nil
+	}
+
+	*ba = decrypted
+
+	return decrypted
+}
+
+func (h *loginHandler) makeHash() string {
+	sha := sha1.New()
+
+	sha.Write(h.conn.sharedSecret)
+	sha.Write(h.deps.Keypair.Public)
+	hash := sha.Sum(nil)
+
+	negative := (hash[0] & 0x80) == 0x80
+	if negative {
+		hash = twosComplement(hash)
+	}
+
+	// Trim away zeroes
+	res := strings.TrimLeft(hex.EncodeToString(hash), "0")
+	if negative {
+		res = "-" + res
+	}
+
+	return res
+}
+
+func twosComplement(p []byte) []byte {
+	carry := true
+	for i := len(p) - 1; i >= 0; i-- {
+		p[i] = ^p[i]
+		if carry {
+			carry = p[i] == 0xff
+			p[i]++
+		}
+	}
+	return p
+}
+
+//func (h *loginHandler) auth() bool {
+//
+//}

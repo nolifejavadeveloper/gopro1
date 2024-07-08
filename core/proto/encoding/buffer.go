@@ -1,6 +1,7 @@
 package encoding
 
 import (
+	"errors"
 	"io"
 )
 
@@ -75,6 +76,17 @@ func (b *Buffer) WriteWithLength(id byte, types1 ...DataType) error {
 
 	b.Data = result
 
+	return nil
+}
+
+func (b *Buffer) TruncateBefore() error {
+	if b.index < 0 || b.index > len(b.Data) {
+		return errors.New("index out of bounds")
+	}
+
+	b.Data = b.Data[b.index:]
+
+	b.index = 0
 	return nil
 }
 

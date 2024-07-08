@@ -11,6 +11,10 @@ type Keypair struct {
 	Private *rsa.PrivateKey
 }
 
+type PublicKey struct {
+	PublicKey []byte
+}
+
 func MakeKeypairBytes() (*Keypair, error) {
 	const bitSize = 1024
 
@@ -30,4 +34,9 @@ func MakeKeypairBytes() (*Keypair, error) {
 		Public:  publicKeyBytes,
 		Private: privateKey,
 	}, nil
+}
+
+func (k *Keypair) Decrypt(bytearr []byte) error {
+
+	return nil
 }

@@ -15,9 +15,9 @@ type Disconnect struct {
 }
 
 type EncryptionRequest struct {
+	ServerId    encoding.String
 	PublicKey   encoding.ByteArray
 	VerifyToken encoding.ByteArray
-	ShouldAuth  encoding.Boolean
 }
 
 type EncryptionResponse struct {
@@ -43,9 +43,9 @@ func NewDisconnect(component *component.TextComponent) (*Disconnect, error) {
 
 func NewEncryptionRequest(pub []byte, verifyToken []byte) *EncryptionRequest {
 	return &EncryptionRequest{
+		ServerId:    "",
 		PublicKey:   pub,
 		VerifyToken: verifyToken,
-		ShouldAuth:  true,
 	}
 }
 

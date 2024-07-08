@@ -7,8 +7,7 @@ type Packet struct {
 	buffer *encoding.Buffer
 }
 
-func Parse(data []byte) (*Packet, error) {
-	buffer := encoding.NewBuffer(data)
+func Parse(buffer *encoding.Buffer) (*Packet, error) {
 	var id encoding.Varint
 
 	if err := id.Read(buffer); err != nil {

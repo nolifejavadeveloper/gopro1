@@ -20,7 +20,7 @@ type Proxy struct {
 
 type HandlerDependency struct {
 	EventBus *event.Bus
-	Public   []byte
+	Keypair  *encryption.Keypair
 }
 
 func NewProxy(debug bool) *Proxy {
@@ -108,7 +108,7 @@ func createLogger(debug bool) zerolog.Logger {
 }
 
 func (p *Proxy) handleConnection(conn net.Conn) {
-	wrapped := Wrap(conn, p.logger.With().Str("address", conn.RemoteAddr().String()).Logger(), &HandlerDependency{EventBus: p.eventBus, Public: p.keypair.Public}, p.keypair.Private)
+	wrapped := Wrap(conn, p.logger.With().Str("address", conn.RemoteAddr().String()).Logger(), &HandlerDependency{EventBus: p.eventBus, Keypair: p.keypair})
 
 	defer func() {
 		wrapped.Close()
@@ -125,10 +125,8 @@ func (p *Proxy) handlePackets(conn *Conn) {
 		if err != nil {
 			if err == io.EOF {
 				conn.Logger.Debug().Msg("Connection closed")
-				return
+				conn.Close()
 			}
-			conn.Logger.Error().Err(err).Msg("Error reading packet, connection closed")
-			conn.Close()
 			return
 		}
 

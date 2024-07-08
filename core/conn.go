@@ -3,8 +3,7 @@ package core
 import (
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
-	"crypto/rsa"
+	"fmt"
 	"github.com/rs/zerolog"
 	"gopro/core/proto"
 	"gopro/core/proto/encoding"
@@ -22,7 +21,6 @@ type Conn struct {
 	Threshold       int
 
 	encryptedState encryption.EncryptionState
-	privateKey     *rsa.PrivateKey
 	sharedSecret   []byte
 	encrypter      cipher.Stream
 	decrypter      cipher.Stream
@@ -34,8 +32,8 @@ type PacketHandler interface {
 	Handle(packet *proto.Packet)
 }
 
-func Wrap(conn net.Conn, logger zerolog.Logger, deps *HandlerDependency, key *rsa.PrivateKey) *Conn {
-	wrapped := &Conn{Conn: conn, State: 0, Logger: logger, privateKey: key}
+func Wrap(conn net.Conn, logger zerolog.Logger, deps *HandlerDependency) *Conn {
+	wrapped := &Conn{Conn: conn, State: 0, Logger: logger}
 	wrapped.currentHandler = newHandshakeHandler(deps, wrapped)
 	return wrapped
 
@@ -60,23 +58,59 @@ func (c *Conn) Read() (*proto.Packet, error) {
 		return nil, nil
 	}
 
-	// Read packet data
-	packetLength, err := c.readLength()
+	buffer := encoding.NewBuffer(make([]byte, 4096))
+
+	//read packet data
+	l, err := c.Conn.Read(buffer.Data)
 	if err != nil {
 		return nil, err
 	}
 
-	packetData := make([]byte, packetLength)
-	err = c.decrypt(packetData)
+	buffer.Data = buffer.Data[:l]
+
+	if c.encryptedState == encryption.SharedKey {
+		c.decrypt(buffer.Data)
+	}
+
+	var leng encoding.Varint
+	err = leng.Read(buffer)
 	if err != nil {
+		c.Logger.Error().Err(err).Msg("error reading packet length")
+		c.Close()
 		return nil, err
 	}
 
-	packet, err := proto.Parse(packetData)
+	err = buffer.TruncateBefore()
+	if err != nil {
+		c.Logger.Error().Msg("incomplete packet received")
+		c.Close()
+		return nil, err
+	}
+
+	if int(leng) != len(buffer.Data) {
+		c.Logger.Error().Msg(fmt.Sprintf("incomplete packet received, expected %d but got %d", leng, len(buffer.Data)))
+		c.Close()
+		return nil, err
+	}
+
+	packet, err := proto.Parse(buffer)
+	if err != nil {
+		c.Logger.Error().Err(err).Msg("error parsing packet")
+		c.Close()
+		return nil, err
+	}
+
+	err = buffer.TruncateBefore()
 
 	if err != nil {
-		c.Logger.Error().Err(err).Msg("Error reading packet data")
+		c.Logger.Error().Err(err).Msg("error advancing buffer")
+		c.Close()
 		return nil, err
+	}
+
+	//actual data now
+	if c.encryptedState == encryption.PrivateKey {
+
 	}
 
 	return packet, nil
@@ -89,46 +123,12 @@ func (c *Conn) SwitchState(b byte) {
 func (c *Conn) SwitchPacketHandler(handler PacketHandler) {
 	c.currentHandler = handler
 }
-
-func (c *Conn) readLength() (int, error) {
-	buffer := encoding.NewBuffer(make([]byte, 5))
-	_, err := c.Conn.Read(buffer.Data)
-	if err != nil {
-		c.Logger.Error().Err(err).Msg("Error reading length from connection")
-		return 0, err
-	}
-
-	err = c.decrypt(buffer.Data)
-	if err != nil {
-		return 0, err
-	}
-
-	var varint encoding.Varint
-	err = varint.Read(buffer)
-
-	return int(varint), err
+func (c *Conn) decrypt(bytearr []byte) {
+	decrypted := make([]byte, len(bytearr))
+	c.decrypter.XORKeyStream(decrypted, bytearr)
+	copy(bytearr, decrypted)
 }
 
-func (c *Conn) decrypt(bytearr []byte) error {
-	switch c.encryptedState {
-	case encryption.PrivateKey:
-		decrypted, err := rsa.DecryptPKCS1v15(rand.Reader, c.privateKey, bytearr)
-		if err != nil {
-			c.Logger.Error().Err(err).Msg("Error decrypting data with private key")
-			return err
-		}
-		copy(bytearr, decrypted)
-		return nil
-
-	case encryption.SharedKey:
-		decrypted := make([]byte, len(bytearr))
-		c.decrypter.XORKeyStream(decrypted, bytearr)
-		copy(bytearr, decrypted)
-		return nil
-	}
-
-	return nil
-}
 func (c *Conn) SendPacket(pk *proto.Packet) error {
 	_, err := c.Conn.Write(pk.Bytes())
 	return err
