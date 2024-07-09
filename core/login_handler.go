@@ -19,10 +19,6 @@ import (
 	"strings"
 )
 
-const (
-	url = "https://sessionserver.mojang.com/session/minecraft/hasJoined?"
-)
-
 type loginHandler struct {
 	deps   *HandlerDependency
 	conn   *Conn

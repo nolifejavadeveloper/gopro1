@@ -80,14 +80,7 @@ func (c *Conn) Read() (*proto.Packet, error) {
 		return nil, err
 	}
 
-	err = buffer.TruncateBefore()
-	if err != nil {
-		c.Logger.Error().Msg("incomplete packet received")
-		c.Close()
-		return nil, err
-	}
-
-	if int(leng) != len(buffer.Data) {
+	if int(leng) > len(buffer.Data) {
 		c.Logger.Error().Msg(fmt.Sprintf("incomplete packet received, expected %d but got %d", leng, len(buffer.Data)))
 		c.Close()
 		return nil, err
@@ -98,19 +91,6 @@ func (c *Conn) Read() (*proto.Packet, error) {
 		c.Logger.Error().Err(err).Msg("error parsing packet")
 		c.Close()
 		return nil, err
-	}
-
-	err = buffer.TruncateBefore()
-
-	if err != nil {
-		c.Logger.Error().Err(err).Msg("error advancing buffer")
-		c.Close()
-		return nil, err
-	}
-
-	//actual data now
-	if c.encryptedState == encryption.PrivateKey {
-
 	}
 
 	return packet, nil
